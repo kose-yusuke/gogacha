@@ -1,3 +1,3 @@
-module github.com/kose-yusuke/gacha
+module github.com/kose-yusuke/gogacha
 
 go 1.16
