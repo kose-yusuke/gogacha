@@ -11,6 +11,7 @@ func init() {
 	rand.Seed(time.Now().Unix())
 }
 
+
 func DrawN(p *Player, n int) ([]*Card, map[Rarity]int) {
 	p.draw(n)
 

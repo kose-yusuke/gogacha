@@ -4,9 +4,10 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	// TODO: インポートパスを公開したものに変更する
-	"github.com/"
+	"github.com/kose-yusuke/gacha"
 )
 
 func main() {
@@ -15,8 +16,8 @@ func main() {
 	n := inputN(p)
 	results, summary := gacha.DrawN(p, n)
 
-	fmt.Println(results)
-	fmt.Println(summary)
+	saveResults(results)
+	saveSummary(summary)
 }
 
 func inputN(p *gacha.Player) int {
@@ -35,4 +36,41 @@ func inputN(p *gacha.Player) int {
 	}
 
 	return n
+}
+
+
+func saveResults(results []*gacha.Card) {
+	f, err := os.Create("results.txt")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer func() {
+		if err := f.Close(); err != nil {
+			fmt.Println(err)
+		}
+	}()
+
+	for _, result := range results {
+		fmt.Fprintln(f, result)
+	}
+}
+
+func saveSummary(summary map[gacha.Rarity]int) {
+	f, err := os.Create("summary.txt")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer func() {
+		if err := f.Close(); err != nil {
+			fmt.Println(err)
+		}
+	}()
+
+	for rarity, count := range summary {
+		fmt.Fprintf(f, "%s %d\n", rarity.String(), count)
+	}
 }
