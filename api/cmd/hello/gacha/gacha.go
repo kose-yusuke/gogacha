@@ -14,7 +14,6 @@ func init() {
 
 func DrawN(p *Player, n int) ([]*Card, map[Rarity]int) {
 	p.draw(n)
-
 	results := make([]*Card, n)
 	summary := make(map[Rarity]int)
 	for i := 0; i < n; i++ {
