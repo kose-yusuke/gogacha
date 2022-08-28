@@ -1,1 +1,1 @@
-# gogacha
+# Go練習用
