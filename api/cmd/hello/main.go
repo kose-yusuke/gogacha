@@ -3,94 +3,148 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
+	"html/template"
+	"net/http"
 	"os"
 	"strconv"
 	// TODO: インポートパスを公開したものに変更する
 	"github.com/kose-yusuke/gogacha/gacha"
+	"github.com/tenntenn/sqlite"
 )
 
+var tmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
+<html>
+	<head><title>ガチャ</title></head>
+	<body>
+		<form action="/draw">
+			<label for="num">枚数</input>
+			<input type="number" name="num" min="1" value="1">
+			<input type="submit" value="ガチャを引く">
+		</form>
+		<h1>結果一覧</h1>
+		<ol>{{range .}}
+		<li>{{.}}</li>
+		{{end}}</ol>
+	</body>
+</html>`))
+
 func main() {
-	p := gacha.NewPlayer(10, 100)
-
-	n := inputN(p)
-	results, summary := gacha.DrawN(p, n)
-
-	saveResults(results)
-	saveSummary(summary)
-}
-
-func inputN(p *gacha.Player) int {
-
-	max := p.DrawableNum()
-	fmt.Printf("ガチャを引く回数を入力してください（最大:%d回）\n", max)
-
-	var n int
-	for {
-		fmt.Print("ガチャを引く回数>")
-		fmt.Scanln(&n)
-		if n > 0 && n <= max {
-			break
-		}
-		fmt.Printf("1以上%d以下の数を入力してください\n", max)
-	}
-
-	return n
-}
-
-func initialTickets() int {
-	if len(os.Args) == 1 {
-		fmt.Fprintln(os.Stderr, "ガチャチケットの枚数を入力してください")
-		os.Exit(1)
-	}
-
-	// TODO: プログラム引数の1つめを取得し
-	// strconv.Atoi関数でint型に変換する
-	// 第1戻り値は変数num、第2戻り値は変数errに代入する
-	num, err :=strconv.Atoi(os.Args[1])
-
-	if err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	return num
 }
 
-func saveResults(results []*gacha.Card) {
-	f, err := os.Create("results.txt")
+func run() error {
+
+	db, err := sql.Open(sqlite.DriverName, "results.db")
 	if err != nil {
-		fmt.Fprintln(os.Stderr,err)
-		os.Exit(1)
-		return
+		return fmt.Errorf("データベースのOpen:%w", err)
 	}
 
-	defer func() {
-		if err := f.Close(); err != nil {
-			fmt.Println(err)
+	if err := createTable(db); err != nil {
+		return err
+	}
+
+	p := gacha.NewPlayer(10, 100)
+	// ※本当はハンドラ間で競合が起きるのでNG
+	play := gacha.NewPlay(p)
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// TODO: データベースから結果を最大100件取得し、変数resultsに代入
+		results, err := getResults(db, 100)
+
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-	}()
 
-	for _, result := range results {
-		fmt.Fprintln(f, result)
-	}
+		if err := tmpl.Execute(w, results); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	http.HandleFunc("/draw", func(w http.ResponseWriter, r *http.Request) {
+		num, err := strconv.Atoi(r.FormValue("num"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		for i := 0; i < num; i++ {
+			if !play.Draw() {
+				break
+			}
+
+			if err := saveResult(db, play.Result()); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+
+			}
+		}
+
+		if err := play.Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, "/", http.StatusFound)
+	})
+
+	return http.ListenAndServe(":8080", nil)
 }
 
-func saveSummary(summary map[gacha.Rarity]int) {
-	f, err := os.Create("summary.txt")
+func createTable(db *sql.DB) error {
+	const sqlStr = `CREATE TABLE IF NOT EXISTS results(
+		id        INTEGER PRIMARY KEY,
+		rarity	  TEXT NOT NULL,
+		name      TEXT NOT NULL
+	);`
+
+	_, err := db.Exec(sqlStr)
 	if err != nil {
-		fmt.Println(os.Stderr,err)
-		os.Exit(1)
-		return
+		return fmt.Errorf("テーブル作成:%w", err)
 	}
 
-	defer func() {
-		if err := f.Close(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+	return nil
+}
+
+func saveResult(db *sql.DB, card *gacha.Card) error {
+	const sqlStr = `INSERT INTO results(rarity, name) VALUES (?,?);`
+	// TODO: Execメソッドを用いてINSERT文を実行する
+	_, err := db.Exec(sqlStr, card.Rarity.String(), card.Name)
+
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func getResults(db *sql.DB, limit int) ([]*gacha.Card, error) {
+	const sqlStr = `SELECT rarity, name FROM results LIMIT ?`
+	rows, err := db.Query(sqlStr, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%qの実行:%w", sqlStr, err)
+	}
+	defer rows.Close()
+
+	var results []*gacha.Card
+	for rows.Next() {
+		var card gacha.Card
+		// TODO: rows.Scanメソッドを用いてレコードをcardのフィールドに読み込む
+		err := rows.Scan(&card.Rarity, &card.Name)
+
+		if err != nil {
+			return nil, fmt.Errorf("Scan:%w", err)
 		}
-	}()
-
-	for rarity, count := range summary {
-		fmt.Fprintf(f, "%s %d\n", rarity.String(), count)
+		results = append(results, &card)
 	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("結果の取得:%w", err)
+	}
+
+	return results, nil
 }
